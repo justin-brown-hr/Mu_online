@@ -1,0 +1,78 @@
+#include "stdafx.h"
+#include "resource.h"
+#include "Main.h"
+#include "Common.h"
+#include "CustomItem.h"
+#include "CustomJewel.h"
+#include "CustomWing.h"
+#include "CustomWIngEffect.h"
+#include "HackCheck.h"
+#include "HealthBar.h"
+#include "Item.h"
+#include "PacketManager.h"
+#include "PrintPlayer.h"
+#include "Protect.h"
+#include "Protocol.h"
+#include "Reconnect.h"
+#include "Resolution.h"
+#include "Util.h"
+
+// Common
+#include "Util/CCRC32.H"
+#include <atltime.h>
+
+HINSTANCE hins;
+
+extern "C" _declspec(dllexport) void EntryProc() // OK
+{
+	if(gProtect.ReadMainFile("main.emu") == 0)
+	{
+		ExitProcess(0);
+	}
+
+#if (ALLOC_CONSOLE == 1)
+	/*
+		Debug purpose only.
+	*/
+	if (AllocConsole())
+	{
+		auto stdout_f = freopen("CONOUT$", "w", stdout);
+		SetConsoleTitle("Debug Console");
+		SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_RED);
+	}
+#endif // (ALLOC_CONSOLE == 1)
+
+	MemoryCpy(0x7A17EE, gProtect.m_MainInfo.IpAddress, sizeof(gProtect.m_MainInfo.IpAddress)); // IpAddress (this Main build)
+
+	SetByte(0x7A2838, (gProtect.m_MainInfo.ClientVersion[0] + 1)); // Version
+	SetByte(0x7A2839, (gProtect.m_MainInfo.ClientVersion[2] + 2)); // Version
+	SetByte(0x7A283A, (gProtect.m_MainInfo.ClientVersion[3] + 3)); // Version
+	SetByte(0x7A283B, (gProtect.m_MainInfo.ClientVersion[5] + 4)); // Version
+	SetByte(0x7A283C, (gProtect.m_MainInfo.ClientVersion[6] + 5)); // Version
+
+	MemoryCpy(0x7A2840, gProtect.m_MainInfo.ClientSerial, sizeof(gProtect.m_MainInfo.ClientSerial)); // ClientSerial
+
+	SetCompleteHook(0xFF, 0x4FF68D, &ProtocolCoreEx);
+
+	gPacketManager.LoadEncryptionKey("Data\\Enc1.dat");
+	gPacketManager.LoadDecryptionKey("Data\\Dec2.dat");
+}
+
+BOOL APIENTRY DllMain(HANDLE hModule,DWORD ul_reason_for_call,LPVOID lpReserved) // OK
+{
+	switch(ul_reason_for_call)
+	{
+		case DLL_PROCESS_ATTACH:
+			hins = (HINSTANCE)hModule;
+			EntryProc();
+			break;
+		case DLL_PROCESS_DETACH:
+			break;
+		case DLL_THREAD_ATTACH:
+			break;
+		case DLL_THREAD_DETACH:
+			break;
+	}
+
+	return 1;
+}

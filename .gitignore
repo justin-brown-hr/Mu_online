@@ -1,0 +1,35 @@
+# Secrets / local
+.env
+.env.*
+*.pfx
+*.pem
+credentials*.json
+
+# Huge / regenerable
+m1/host/Client/
+m1/host/SQL/
+**/Build/
+**/Debug/
+**/Release/
+**/*.exe
+**/*.pdb
+**/*.ilk
+**/*.obj
+**/*.pch
+**/*.ipdb
+**/*.iobj
+
+# Keep compiled server binaries we actually run (override above for Server Files)
+!m1/host/Server/xMuPP-src/Server Files/**/*.exe
+!m1/host/Server/xMuPP-src/Server Files/**/*.dll
+
+# Logs / temp screenshots
+**/LOG/
+**/*.log
+**/_shot.png
+**/ScreenShots/
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store

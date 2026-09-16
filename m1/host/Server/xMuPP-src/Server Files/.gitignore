@@ -1,0 +1,27 @@
+## Server log folders
+ConnectServer/LOG/
+
+DataServer/LOG/
+
+GameServer/CONNECT_LOG/
+GameServer/HACK_LOG/
+GameServer/LOG/
+
+GameServerCS/CONNECT_LOG/
+GameServerCS/HACK_LOG/
+GameServerCS/LOG/
+
+JoinServer/LOG/
+JoinServer/LOG_ACCOUNT/
+
+## Server binary files
+ConnectServer/ConnectServer*.*
+!ConnectServer/ConnectServer.ini
+
+DataServer/DataServer*.*
+!DataServer/DataServer.ini
+
+GameServer/GameServer*.*
+
+JoinServer/JoinServer*.*
+!JoinServer/JoinServer.ini
