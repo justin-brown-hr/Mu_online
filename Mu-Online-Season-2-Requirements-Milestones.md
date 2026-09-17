@@ -152,7 +152,6 @@ Milestone structure was proposed by the client and accepted unchanged. Funds are
 ### M2 — Game content and base events
 
 **Window:** Weeks 1–3 · **Fee:** $1,300
-
 #### Deliverables
 
 - All five classes configured with skill trees and balanced stats
