@@ -22,14 +22,14 @@
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v141_xp</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -46,16 +46,16 @@
     <OutDir>$(ProjectDir)Build\$(Configuration)\</OutDir>
     <IntDir>$(OutDir)ItmDir\</IntDir>
     <TargetName>Main</TargetName>
-    <IncludePath>D:\work\m1\host\Server\xMuPP-src\Source\Common\Detours\include;D:\work\m1\host\Server\xMuPP-src\Source\Common;$(IncludePath)</IncludePath>
-    <LibraryPath>D:\work\m1\host\Server\xMuPP-src\Source\Common\Detours\lib.X86;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(ProjectDir)..\..\Common\Detours\include;$(ProjectDir)..\..\Common;$(IncludePath)</IncludePath>
+    <LibraryPath>$(ProjectDir)..\..\Common\Detours\lib.X86;$(LibraryPath)</LibraryPath>
     <OutDir>$(ProjectDir)Build\$(Configuration)\</OutDir>
     <IntDir>$(OutDir)ItmDir\</IntDir>
     <TargetName>Main</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>D:\work\m1\host\Server\xMuPP-src\Source\Common\Detours\include;D:\work\m1\host\Server\xMuPP-src\Source\Common;$(IncludePath)</IncludePath>
-    <LibraryPath>D:\work\m1\host\Server\xMuPP-src\Source\Common\Detours\lib.X86;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(ProjectDir)..\..\Common\Detours\include;$(ProjectDir)..\..\Common;$(IncludePath)</IncludePath>
+    <LibraryPath>$(ProjectDir)..\..\Common\Detours\lib.X86;$(LibraryPath)</LibraryPath>
     <OutDir>$(ProjectDir)Build\$(Configuration)\</OutDir>
     <IntDir>$(OutDir)ItmDir\</IntDir>
     <TargetName>Main</TargetName>
@@ -67,7 +67,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;MAIN_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>D:\work\m1\host\Server\xMuPP-src\Source\Common\;D:\work\m1\host\Server\xMuPP-src\Source\Client Side\Main_v102c\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\Common\;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -76,7 +76,8 @@
       </ModuleDefinitionFile>
     </Link>
     <PostBuildEvent>
-      <Command>copy "$(OutDir)$(TargetName).*" "D:\work\m1\host\Server\xMuPP-src\Client Files\"</Command>
+      <Command>if not exist "$(ProjectDir)..\..\..\Client Files" mkdir "$(ProjectDir)..\..\..\Client Files"
+copy "$(OutDir)$(TargetName).*" "$(ProjectDir)..\..\..\Client Files\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -88,7 +89,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;MAIN_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>D:\work\m1\host\Server\xMuPP-src\Source\Common\;D:\work\m1\host\Server\xMuPP-src\Source\Client Side\Main_v102c\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\Common\;$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -99,7 +100,8 @@
       </ModuleDefinitionFile>
     </Link>
     <PostBuildEvent>
-      <Command>copy "$(OutDir)$(TargetName).*" "D:\work\m1\host\Server\xMuPP-src\Client Files\"</Command>
+      <Command>if not exist "$(ProjectDir)..\..\..\Client Files" mkdir "$(ProjectDir)..\..\..\Client Files"
+copy "$(OutDir)$(TargetName).*" "$(ProjectDir)..\..\..\Client Files\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

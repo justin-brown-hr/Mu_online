@@ -2,10 +2,21 @@
 # Enables SQL Express protocols, restarts service, restores MuOnline, creates 32-bit ODBC DSN
 
 $ErrorActionPreference = 'Stop'
-$InstanceKey = 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL17.SQLEXPRESS\MSSQLServer\SuperSocketNetLib'
-$Bak = 'D:\work\m1\host\Server\xMuPP-src\Database Files\MuOnline.bak'
-$DataDir = 'D:\work\m1\host\SQL\data'
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Bak = Join-Path $RepoRoot 'host\Server\xMuPP-src\Database Files\MuOnline.bak'
+$DataDir = Join-Path $RepoRoot 'host\SQL\data'
 
+$InstanceKey = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server' -ErrorAction SilentlyContinue |
+  Where-Object { $_.PSChildName -like 'MSSQL*.SQLEXPRESS' } |
+  ForEach-Object { Join-Path $_.PSPath 'MSSQLServer\SuperSocketNetLib' } |
+  Where-Object { Test-Path $_ } |
+  Select-Object -First 1
+if (-not $InstanceKey) {
+  throw 'SQL Express registry key not found. Install SQL Server Express first (instance SQLEXPRESS).'
+}
+
+Write-Host "Using instance key: $InstanceKey"
+Write-Host "Bak: $Bak"
 Write-Host 'Enabling Shared Memory, Named Pipes, TCP/IP...'
 Set-ItemProperty "$InstanceKey\Sm" -Name Enabled -Value 1
 Set-ItemProperty "$InstanceKey\Np" -Name Enabled -Value 1
@@ -41,23 +52,8 @@ $filelist = sqlcmd -S '.\SQLEXPRESS' -E -l 20 -h -1 -W -Q "SET NOCOUNT ON; RESTO
 $mdf = Join-Path $DataDir 'MuOnline.mdf'
 $ldf = Join-Path $DataDir 'MuOnline_log.ldf'
 
-Write-Host 'Restoring MuOnline database...'
-sqlcmd -S '.\SQLEXPRESS' -E -l 60 -Q @"
-IF DB_ID('MuOnline') IS NOT NULL BEGIN
-  ALTER DATABASE MuOnline SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-  DROP DATABASE MuOnline;
-END
-RESTORE DATABASE MuOnline
-FROM DISK = N'$Bak'
-WITH MOVE 'MuOnline' TO N'$mdf',
-     MOVE 'MuOnline_log' TO N'$ldf',
-     REPLACE;
-"@ | Out-Host
-
-# If first restore fails due to logical names, try alternate common names
-if ($LASTEXITCODE -ne 0) {
-    Write-Host 'Retry restore with alternate logical names...'
-    sqlcmd -S '.\SQLEXPRESS' -E -l 60 -Q @"
+Write-Host 'Restoring MuOnline database (logical names MuOnline_Data / MuOnline_Log)...'
+sqlcmd -S '.\SQLEXPRESS' -E -l 60 -b -Q @"
 IF DB_ID('MuOnline') IS NOT NULL BEGIN
   ALTER DATABASE MuOnline SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
   DROP DATABASE MuOnline;
@@ -68,7 +64,7 @@ WITH MOVE 'MuOnline_Data' TO N'$mdf',
      MOVE 'MuOnline_Log' TO N'$ldf',
      REPLACE;
 "@ | Out-Host
-}
+if ($LASTEXITCODE -ne 0) { throw "MuOnline restore failed with exit $LASTEXITCODE" }
 
 Write-Host 'Creating 32-bit System DSN MuOnline -> .\SQLEXPRESS ...'
 # Remove existing then add

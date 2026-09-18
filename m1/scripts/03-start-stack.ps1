@@ -1,4 +1,4 @@
-﻿param([string]$ServerRoot = "D:\work\m1\host\Server\xMuPP-src\Server Files")
+﻿param([string]$ServerRoot = (Join-Path $PSScriptRoot "..\host\Server\xMuPP-src\Server Files"))
 $ErrorActionPreference = "Stop"
 $ordered = @(
   @{ Name = "DataServer";    RelPath = "DataServer\DataServer.exe" },

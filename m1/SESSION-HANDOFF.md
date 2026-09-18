@@ -1,7 +1,7 @@
 # M1 session handoff — continue on VPS
 
-**Saved:** 2026-09-16  
-**Workspace root:** `D:\work` (repo) / project under `m1\`  
+**Saved:** 2026-09-18  
+**Workspace root:** `C:\work\Mu_online` (this VPS: `WIN-2G5KCBCCQ1R`, public IP `103.56.164.158`)  
 **Package:** xMuPP Season 2 (`ptr0x-real/xMuPP`)  
 **Goal:** Milestone 1 — 4 servers up → client login → char in Lorencia → combat → logout/login persist → one acceptance recording.  
 **Scope lock:** No web admin / events UI / custom modules.
@@ -13,37 +13,57 @@
 ```
 Continue Mu Online Season 2 Milestone 1 from m1/SESSION-HANDOFF.md.
 Do not repeat dead loops (file IP patch + blind relaunch).
-Current blocker: client never sends to ConnectServer even with live IP 127.0.0.1 after Main.dll inject.
-Next: find real CS port / why connect never fires after successful EntryProc; then login test/test123 → Lorencia → combat → recording.
+Stack is up on 103.56.164.158. Current blocker: SuZaNa CLtDLL Erro 100 (false-positive on ConsoleWindowClass / PowerShell) then AV when MessageBox is nop'd; without CLtDLL the loader shows fatal "Error Acesse: www.servidoresmuonline.com.br/".
+Next: finish anti-CLtDLL path so main stays alive with a real window + sendto CS, OR run play-safe client on a GPU PC (no agent consoles) against 103.56.164.158:44405.
+Login test/test123 → Lorencia → combat → recording.
 ```
 
 ---
 
-## Status
+## Status (2026-09-18 VPS)
 
 | Area | Status |
 | --- | --- |
-| SQL Express + MuOnline + 32-bit ODBC | Done (local). Re-do on VPS if fresh machine |
-| DS → JS → CS → GS build & run | Done |
-| Ports | CS `44405` TCP+UDP, GS `55901`, DS `55960`, JS `55970` |
-| ConnectServer UDP F4:06 / F4:03 reply | **Done** — patched `SocketManagerUdp`; probe works |
-| Release `Main.dll` + `LaunchMu` inject | **Done** — EntryProc runs, `main.emu` OK |
-| Live memory after inject | IP `127.0.0.1`, ver `22548`, serial `k5lEopalwaudns8h` |
-| Client → ConnectServer traffic | **BLOCKED** — no TCP/UDP from game to CS; disconnect OK dialog |
+| Git repo on VPS | Done (`C:\work\Mu_online`) |
+| SQL Express + MuOnline + 32-bit ODBC | **Done** |
+| VS / MSBuild / C++ toolset v143 | **Done** |
+| Server EXEs (DS/JS/CS/GS) | **Done** — running; UDP F4 probe OK on public IP |
+| Account `test`/`test123` | **Done** |
+| `play-safe` client | **Done** at `m1/host/Client/play-safe/` |
+| Release `Main.dll` + `LaunchMu` | **Done** — suspended inject + early hooks + winsock rewrite; staged beside `main.exe` |
+| ConnectServer / MainInfo public IP | **103.56.164.158** |
+| Client launch on this VPS | **Blocked** — see SuZaNa / license notes below |
+| Client → ConnectServer `sendto` | Not yet observed |
 | Lorencia / combat / recording | Not started |
 
 ---
 
-## Critical findings (do not re-learn the hard way)
+## Critical findings (2026-09-18 — do not re-learn)
+
+1. **`Erro 100` is NOT DirectX.** Dialog text: SuZaNa CTM — “Foi Encontrado um Programa Hacker…”. Source DLL: `play-safe\CLtDLL.dll` (export `affvoce`). It `FindWindow`s `ConsoleWindowClass` (our PowerShell/agent consoles) and scans processes.
+2. **Renaming `CLtDLL.dll` away** avoids Erro 100 but the packed loader then shows fatal **`Error Acesse: www.servidoresmuonline.com.br/`** and exits on OK. Keep `CLtDLL.dll` present.
+3. **`LaunchMu` now `CREATE_SUSPENDED` → inject `Main.dll` → resume** so hooks install before CLtDLL runs (`m1/scripts/LaunchMu.cs`).
+4. **`Main.dll` early hooks** (MessageBox / FindWindow / Process32 / Module32 / ExitProcess): can nop Erro 100 MessageBox, but process then **AV `0xC0000005`** (~200ms) — ExitProcess nop often never logs (possible `RtlExitUserProcess` path; hook added, needs retest).
+5. Without CLtDLL + MessageBox nop on license nag: process stays alive but **no game window** (returning from ExitProcess after noreturn call = zombie).
+6. Still true: ASPack-packed `main.exe`; runtime IP via `Main.dll`; CS UDP F4 patched; do not file-patch packed IP strings.
+7. VPS video = **Microsoft Basic Display**; dgVoodoo D3D8/9 present. GPU PC client → `103.56.164.158:44405` remains valid fallback for M1 UI.
+8. Defender exclusion for play-safe folder required (user confirmed).
+
+---
+
+## Critical findings (older — still valid)
 
 1. **`play-safe\main.exe` is ASPack-packed.** Editing connect IP strings in the file does **not** fix live connect. Runtime patch via `Main.dll` after unpack is required.
-2. **Debug `Main.dll` will not load** (depends on `VCRUNTIME140D`). Always build **Release|Win32** with toolset `v143`.
-3. Stock `main.exe` does **not** import `Main.dll`. Use injector: `m1/scripts/LaunchMu.cs` → `LaunchMu.exe` beside client, or inject after main window appears.
+2. **Debug `Main.dll` will not load** (depends on `VCRUNTIME140D`). Always build **Release|Win32** with toolset **v143**.
+3. Stock `main.exe` does **not** import `Main.dll`. Use injector: `m1/scripts/LaunchMu.cs` → `LaunchMu.exe` beside client.
 4. ConnectServer stock only answered server-list on **TCP**. Season 2 clients use **UDP** F4. Patch is in:
    - `m1/host/Server/xMuPP-src/Source/Server Side/ConnectServer/SocketManagerUdp.cpp`
    - `m1/host/Server/xMuPP-src/Source/Server Side/ConnectServer/SocketManagerUdp.h`
-5. Even with live IP correct + CS UDP working + inject OK, **game still never opens sockets to CS**. Remaining work is **why connect never fires** (wrong port in code, early disconnect with no retry, wrong connect path) — **not** another localhost IP file edit.
-6. Port candidates seen in binary: `44405`, many `55557` hits. CS should stay on **44405** unless proven otherwise (55557 test: CS listened, still no client hit).
+5. Old session: live IP was `127.0.0.1` after inject, CS UDP probe worked, **game still never opened sockets to CS**. Do **not** another localhost IP file edit.
+6. Port candidates: `44405`, many `55557` hits. CS stays on **44405** unless proven otherwise (55557 listen test: still no client hit).
+7. **Likely real cause (not yet proven):** `LaunchMu` used to wait for the MU window **plus 2 seconds**. CS connect often fires at scene start, so inject was after the first (failed) connect, and the game already sat on the disconnect OK dialog. IP in memory looked correct *after* that, which is why CS logs stayed empty.
+8. xMuPP 1.02c `EntryProc` patches IP at `0x7A16C2` and does **not** patch `IpAddressPort` (that SetWord is only in a commented S6-era block).
+9. This VPS has **no** SQL, compiler, server binaries, or client. Old-session “stack is up” does not carry over.
 
 ---
 
@@ -60,36 +80,32 @@ Next: find real CS port / why connect never fires after successful EntryProc; th
 ## Key paths
 
 ```
-m1/SESSION-HANDOFF.md          ← this file
-m1/VPS-MIGRATE.md              ← how to move files
-m1/M1-CHECKLIST.md
-m1/PACKAGE-DECISION.md
-m1/scripts/03-start-stack.ps1
-m1/scripts/LaunchMu.cs         ← client Main.dll injector source
-m1/host/Server/xMuPP-src/Source/Server Side/ConnectServer/SocketManagerUdp.*
-m1/host/Server/xMuPP-src/Source/Client Side/Main_v102c/Main.cpp   ← EntryProc + M1Log
-m1/host/Server/xMuPP-src/Server Files/   ← running binaries + ini
-m1/host/Client/play-safe/      ← test client (NOT in git — copy separately)
+C:\work\Mu_online\m1\SESSION-HANDOFF.md
+C:\work\Mu_online\m1\VPS-MIGRATE.md
+C:\work\Mu_online\m1\M1-CHECKLIST.md
+C:\work\Mu_online\m1\scripts\03-start-stack.ps1
+C:\work\Mu_online\m1\scripts\04-sql-odbc-setup.ps1
+C:\work\Mu_online\m1\scripts\05-probe-cs.ps1
+C:\work\Mu_online\m1\scripts\LaunchMu.cs
+C:\work\Mu_online\m1\host\Server\xMuPP-src\Source\Server Side\ConnectServer\SocketManagerUdp.*
+C:\work\Mu_online\m1\host\Server\xMuPP-src\Source\Client Side\Main_v102c\Main.cpp
+C:\work\Mu_online\m1\host\Server\xMuPP-src\Server Files\
+C:\work\Mu_online\m1\host\Client\play-safe\   ← NOT in git
 ```
-
-Client launch (after copying client to VPS):
-
-1. Start stack: `m1/scripts/03-start-stack.ps1`
-2. Build Release Main.dll → copy to `play-safe\Main.dll`
-3. Compile `LaunchMu.cs` (x86) into `play-safe\LaunchMu.exe`
-4. Run `LaunchMu.exe` (or start `main.exe`, wait for window, inject)
-5. Check `play-safe\m1-main-dll.log` for `EntryProc done`
-6. Watch ConnectServer `LOG\*.txt` for `SocketManagerUdp] ServerList`
 
 ---
 
 ## Next engineering steps (ordered)
 
-1. On VPS: restore SQL + ODBC + start stack; confirm UDP F4 probe to `127.0.0.1:44405`.
-2. Copy `host/Client/play-safe` (or full Client) outside git.
-3. Prove whether client ever sends **any** packet (pktmon / Wireshark / CS log). If zero: find connect call / port in unpacked process, or try Tools main that matches Main_v102c offsets with a launcher that loads DLL earlier.
-4. Unblock server list → login → create char → Lorencia → combat → relog → one recording.
-5. Do not start M2 web/admin work.
+1. Install **SQL Server Express** (instance `SQLEXPRESS`, TCP/IP on) + run `m1\scripts\04-sql-odbc-setup.ps1`.
+2. Install **VS 2022 Build Tools** with C++ (`Microsoft.VisualStudio.Workload.VCTools`) + ATL, toolset v143.
+3. Build Release Win32: ConnectServer, JoinServer, DataServer, GameServer (post-build copies into `Server Files`). Rebuild ConnectServer so UDP F4 patch is in the EXE.
+4. Build Release Win32 `Main.dll` (`Main_v102c`, toolset v143). Compile `LaunchMu.cs` x86 with `C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe`.
+5. Copy `play-safe` client onto this VPS (not in git). Put `Main.dll` + `LaunchMu.exe` beside `main.exe`.
+6. Start stack: `m1\scripts\03-start-stack.ps1`. Probe UDP: `m1\scripts\05-probe-cs.ps1`.
+7. Run `LaunchMu.exe`. Read `play-safe\m1-main-dll.log` for `sendto` / `connect` lines. That proves whether connect ever fires.
+8. Login `test` / `test123` → create char → Lorencia → combat → relog → one recording.
+9. Do not start M2 web/admin work.
 
 ---
 
