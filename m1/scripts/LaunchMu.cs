@@ -6,19 +6,27 @@ using System.Text;
 using System.Threading;
 
 class LaunchMu {
-  const uint PROCESS_ALL_ACCESS = 0x1F0FFF;
   const uint MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, PAGE_READWRITE = 4;
   const uint CREATE_SUSPENDED = 0x00000004;
-  const uint INFINITE = 0xFFFFFFFF;
+  const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
   const int IpVa = unchecked((int)0x7A16C2);
+  const int PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY = 0x00020007;
+  // winbase.h — disable DEP for this process (needed for ASPack on OptOut systems)
+  const ulong PROCESS_CREATION_MITIGATION_POLICY_DEP_DISABLE = 0x00000002UL;
 
-  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  [StructLayout(LayoutKind.Sequential)]
   struct STARTUPINFO {
     public int cb;
-    public string reserved, desktop, title;
+    public IntPtr reserved, desktop, title;
     public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
     public short wShowWindow, cbReserved2;
     public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct STARTUPINFOEX {
+    public STARTUPINFO StartupInfo;
+    public IntPtr lpAttributeList;
   }
 
   [StructLayout(LayoutKind.Sequential)]
@@ -28,9 +36,11 @@ class LaunchMu {
   }
 
   [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
-  static extern bool CreateProcess(string app, string cmd, IntPtr pa, IntPtr ta, bool inh, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+  static extern bool CreateProcess(string app, string cmd, IntPtr pa, IntPtr ta, bool inh, uint flags, IntPtr env, string dir, IntPtr si, out PROCESS_INFORMATION pi);
+  [DllImport("kernel32", SetLastError = true)] static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+  [DllImport("kernel32", SetLastError = true)] static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attr, IntPtr value, IntPtr size, IntPtr prev, IntPtr retSize);
+  [DllImport("kernel32", SetLastError = true)] static extern void DeleteProcThreadAttributeList(IntPtr list);
   [DllImport("kernel32", SetLastError = true)] static extern uint ResumeThread(IntPtr hThread);
-  [DllImport("kernel32", SetLastError = true)] static extern IntPtr OpenProcess(uint a, bool b, int c);
   [DllImport("kernel32", SetLastError = true)] static extern IntPtr VirtualAllocEx(IntPtr h, IntPtr a, uint s, uint t, uint p);
   [DllImport("kernel32", SetLastError = true)] static extern bool WriteProcessMemory(IntPtr h, IntPtr a, byte[] b, uint s, out uint w);
   [DllImport("kernel32", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr h, IntPtr a, byte[] b, int s, out int r);
@@ -87,6 +97,52 @@ class LaunchMu {
     return false;
   }
 
+  static bool CreateSuspendedNoDep(string exe, string dir, out PROCESS_INFORMATION pi) {
+    pi = new PROCESS_INFORMATION();
+    IntPtr size = IntPtr.Zero;
+    InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+    IntPtr attrList = Marshal.AllocHGlobal((int)size);
+    if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref size)) {
+      Console.WriteLine("InitAttrList err=" + Marshal.GetLastWin32Error());
+      Marshal.FreeHGlobal(attrList);
+      return false;
+    }
+
+    // 64-bit policy value even on WoW64 host when creating 32-bit child from 32-bit parent: use UInt64
+    IntPtr policyMem = Marshal.AllocHGlobal(8);
+    Marshal.WriteInt64(policyMem, unchecked((long)PROCESS_CREATION_MITIGATION_POLICY_DEP_DISABLE));
+    if (!UpdateProcThreadAttribute(attrList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY), policyMem, new IntPtr(8), IntPtr.Zero, IntPtr.Zero)) {
+      Console.WriteLine("UpdateAttr DEP_DISABLE err=" + Marshal.GetLastWin32Error() + " — continuing without");
+    } else {
+      Console.WriteLine("CreateProcess mitigation: DEP_DISABLE");
+    }
+
+    var siex = new STARTUPINFOEX();
+    siex.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+    siex.lpAttributeList = attrList;
+    IntPtr siPtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(STARTUPINFOEX)));
+    Marshal.StructureToPtr(siex, siPtr, false);
+
+    uint flags = CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT;
+    bool ok = CreateProcess(exe, "\"" + exe + "\"", IntPtr.Zero, IntPtr.Zero, false, flags, IntPtr.Zero, dir, siPtr, out pi);
+    if (!ok) {
+      Console.WriteLine("CreateProcess(ex) err=" + Marshal.GetLastWin32Error() + " — fallback plain suspended");
+      var si = new STARTUPINFO();
+      si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+      IntPtr si2 = Marshal.AllocHGlobal(si.cb);
+      Marshal.StructureToPtr(si, si2, false);
+      ok = CreateProcess(exe, "\"" + exe + "\"", IntPtr.Zero, IntPtr.Zero, false, CREATE_SUSPENDED, IntPtr.Zero, dir, si2, out pi);
+      Marshal.FreeHGlobal(si2);
+      if (!ok) Console.WriteLine("CreateProcess err=" + Marshal.GetLastWin32Error());
+    }
+
+    DeleteProcThreadAttributeList(attrList);
+    Marshal.FreeHGlobal(attrList);
+    Marshal.FreeHGlobal(policyMem);
+    Marshal.FreeHGlobal(siPtr);
+    return ok;
+  }
+
   static int Main() {
     string dir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName);
     string exe = Path.Combine(dir, "main.exe");
@@ -94,15 +150,10 @@ class LaunchMu {
     if (!File.Exists(exe) || !File.Exists(dll)) { Console.WriteLine("Need main.exe + Main.dll beside LaunchMu.exe"); return 1; }
 
     Console.WriteLine("Starting suspended " + exe);
-    var si = new STARTUPINFO();
-    si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
     PROCESS_INFORMATION pi;
-    if (!CreateProcess(exe, "\"" + exe + "\"", IntPtr.Zero, IntPtr.Zero, false, CREATE_SUSPENDED, IntPtr.Zero, dir, ref si, out pi)) {
-      Console.WriteLine("CreateProcess err=" + Marshal.GetLastWin32Error());
-      return 2;
-    }
+    if (!CreateSuspendedNoDep(exe, dir, out pi)) return 2;
 
-    Console.WriteLine("pid=" + pi.dwProcessId + " — inject Main.dll before resume (anti-CLtDLL hooks)");
+    Console.WriteLine("pid=" + pi.dwProcessId + " — inject Main.dll before resume");
     bool ok = Inject(pi.hProcess, dll);
     Console.WriteLine(ok ? "Inject OK" : "Inject FAILED");
     if (!ok) {
@@ -110,12 +161,10 @@ class LaunchMu {
       return 4;
     }
 
-    // Give DllMain time to install early hooks while still suspended
     Thread.Sleep(200);
     Console.WriteLine("ResumeThread");
     ResumeThread(pi.hThread);
 
-    // Wait briefly for unpack + confirm Main.dll stays mapped
     string ip = null;
     for (int i = 0; i < 100; i++) {
       Thread.Sleep(100);
@@ -123,6 +172,8 @@ class LaunchMu {
       if (GetExitCodeProcess(pi.hProcess, out code) && code != 259) {
         Console.WriteLine("main exited early code=" + unchecked((int)code));
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        Console.WriteLine("Press Enter to close...");
+        try { Console.ReadLine(); } catch { Thread.Sleep(3000); }
         return 3;
       }
       if (TryReadIp(pi.hProcess, out ip)) {
@@ -133,8 +184,21 @@ class LaunchMu {
 
     bool loaded = ModuleLoaded(pi.dwProcessId, "Main.dll");
     Console.WriteLine(loaded ? "Confirmed loaded: Main.dll" : "Main.dll NOT in module list");
+
+    uint live = 0;
+    GetExitCodeProcess(pi.hProcess, out live);
+    if (live == 259) {
+      Console.WriteLine("main.exe is still running (pid=" + pi.dwProcessId + ").");
+      Console.WriteLine("This console can close — look for the MU game window.");
+    } else {
+      Console.WriteLine("main.exe already dead, exit code=" + unchecked((int)live));
+      Console.WriteLine("Check Erro 100 / Error dialogs, and play-safe\\m1-main-dll.log");
+    }
+
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    return loaded ? 0 : 5;
+    Console.WriteLine("Press Enter to close...");
+    try { Console.ReadLine(); } catch { Thread.Sleep(5000); }
+    return (live == 259) ? 0 : 5;
   }
 }

@@ -33,3 +33,8 @@ m1/host/SQL/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Gameplay recordings are too large for git (GitHub limit 100 MB) - share separately
+m1/evidence/*.mp4
+m1/evidence/*.mkv
+m1/evidence/.recording

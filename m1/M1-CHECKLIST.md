@@ -1,33 +1,29 @@
-﻿# Milestone 1 — Server running, client connecting ($500)
-
-**Host:** VPS `C:\work\Mu_online` — public IP `103.56.164.158`
-
-## Play now
-
-**Do not expect a playable client on this VPS** (Basic Display + SuZaNa `CLtDLL` Erro 100 on PowerShell consoles).
-
-Use a **GPU PC** client pointed at the VPS:
-
-1. Keep the 4 MuEMU server windows open on the VPS (already running)
-2. On the GPU PC, run Season 2 `play-safe` with `Main.dll` + `LaunchMu.exe` + `main.emu` IP `103.56.164.158` port `44405`
-3. Login `test` / `test123` → Lorencia → combat → relog → one recording
-
-VPS-only LaunchMu (for inject/log experiments):
-
-`C:\work\Mu_online\m1\host\Client\play-safe\LaunchMu.exe`
-
-## Status 2026-09-18
-
-- [x] SQL + MuOnline + ODBC
-- [x] VS 2022 Build Tools + MSBuild + cl.exe x86 (v143)
-- [x] Server stack EXEs compiled + running (DS→JS→CS→GS)
-- [x] CS UDP server-list works (public F4 probe OK)
-- [x] Release `Main.dll` (suspended inject, early hooks, winsock rewrite) + `LaunchMu.exe`
-- [x] Account `test` / `test123`
-- [x] `play-safe` on VPS; Erro 100 root-caused (`CLtDLL.dll` / SuZaNa)
-- [ ] **GPU PC client** → `103.56.164.158:44405` → login → Lorencia
-- [ ] Combat → relog recording
-
-**Ports:** CS `44405` TCP+UDP, GS `55901` TCP
-
-**Resume:** `m1/SESSION-HANDOFF.md`
+# Milestone 1 — Server running, client connecting ($500)
+
+**Host:** VPS `C:\work\Mu_online` — public IP `103.56.164.158`
+**Hard requirement:** Client must work **without a discrete GPU** — met: it runs on
+this VPS (Microsoft Basic Display Adapter) with Mesa llvmpipe software OpenGL.
+
+## Play
+
+```powershell
+C:\work\Mu_online\m1\scripts\06-start-client.ps1 -Restart
+```
+
+Server group "Ajuda em MuOnline" → "(Non-PVP) Conectar" → `test` / `test123`.
+The same `play-safe` folder also works on any normal Windows PC.
+
+## Status (2026-09-20) — complete
+
+- [x] Stack + account + public CS (`103.56.164.158:44405`)
+- [x] Client runs on the VPS (no GPU) — `evidence/01-title-screen.png`
+- [x] Server list → GameServer → login — `evidence/02-login-screen.png`
+- [x] Character created — `evidence/03-character-created.png`
+- [x] Lorencia — `evidence/04-lorencia-in-game.png`
+- [x] Combat — `evidence/05-combat-kill-budge-dragon.png`, `06-combat-kill-spider.png`
+- [x] Relog — `evidence/07-relog-character-select.png`, `08-relog-back-in-lorencia.png`
+- [x] Recording — `evidence/M1-full-run.mp4` (5m46s, chat window hidden; not in git)
+
+Known cosmetic issue: HP number in the HUD is byte-swapped (server packet bug).
+
+**Details:** `m1/SESSION-HANDOFF.md`

@@ -62,6 +62,27 @@ static void ApplyLivePatches()
 	MemoryCpy(0x7A2840,gSerial,sizeof(gSerial));
 }
 
+static void ApplyCltLicensePatches()
+{
+	// SuZaNa CLtDLL B540 writes these two bytes into unpacked main.
+	__try
+	{
+		DWORD old = 0;
+		BYTE* p = (BYTE*)0x8C1318;
+		if(VirtualProtect(p, 2, PAGE_EXECUTE_READWRITE, &old))
+		{
+			p[0] = 0x82;
+			p[1] = 0x15;
+			VirtualProtect(p, 2, old, &old);
+			M1Log("applied CLtDLL B540 bytes at 8C1318");
+		}
+	}
+	__except(EXCEPTION_EXECUTE_HANDLER)
+	{
+		M1Log("B540 byte patch failed");
+	}
+}
+
 static int IsCsPort(WORD port)
 {
 	return port == 44405 || port == 55557;
@@ -71,6 +92,36 @@ static void ForceCsAddr(sockaddr_in* in)
 {
 	in->sin_addr.s_addr = inet_addr(gIp);
 	in->sin_port = htons(gCsPort);
+}
+
+// Log up to 48 bytes of a packet as hex, e.g. "send C1 04 F4 06".
+static void M1LogHex(const char* tag,const char* buf,int len)
+{
+	char line[256];
+	int n = wsprintf(line,"%s len=%d:",tag,len);
+	for(int i=0;i<len && i<48 && n < (int)sizeof(line)-4;i++)
+	{
+		n += wsprintf(line+n," %02X",(BYTE)buf[i]);
+	}
+	M1Log(line);
+}
+
+static int (WINAPI *TrueRecv)(SOCKET,char*,int,int) = recv;
+
+static int WINAPI MineRecv(SOCKET s,char* buf,int len,int flags)
+{
+	int r = TrueRecv(s,buf,len,flags);
+	if(r > 0)
+	{
+		M1LogHex("recv",buf,r);
+	}
+	else
+	{
+		char log[64];
+		wsprintf(log,"recv ret=%d wsa=%d",r,r < 0 ? WSAGetLastError() : 0);
+		M1Log(log);
+	}
+	return r;
 }
 
 static int (WINAPI *TrueSendTo)(SOCKET,const char*,int,int,const struct sockaddr*,int) = sendto;
@@ -146,8 +197,8 @@ static int WINAPI MineSend(SOCKET s,const char* buf,int len,int flags)
 	if(getpeername(s,(SOCKADDR*)&addr,&addrLen) == 0)
 	{
 		char log[192];
-		wsprintf(log,"send %s:%u len=%d b0=%02X",inet_ntoa(addr.sin_addr),ntohs(addr.sin_port),len,(BYTE)(buf && len > 0 ? buf[0] : 0));
-		M1Log(log);
+		wsprintf(log,"send %s:%u",inet_ntoa(addr.sin_addr),ntohs(addr.sin_port));
+		M1LogHex(log,buf,len);
 	}
 	else
 	{
@@ -169,6 +220,7 @@ static void InstallWinsockHooks()
 	DetourAttach(&(PVOID&)TrueSendTo,MineSendTo);
 	DetourAttach(&(PVOID&)TrueConnect,MineConnect);
 	DetourAttach(&(PVOID&)TrueSend,MineSend);
+	DetourAttach(&(PVOID&)TrueRecv,MineRecv);
 	LONG err = DetourTransactionCommit();
 	if(err == 0)
 	{
@@ -198,6 +250,123 @@ static int LooksLikeIpAt(DWORD va)
 }
 
 // SuZaNa CLtDLL false-positives on console windows / VPS tooling and then ExitProcess.
+static HMODULE (WINAPI *TrueLoadLibraryA)(LPCSTR) = LoadLibraryA;
+static HMODULE (WINAPI *TrueLoadLibraryExA)(LPCSTR,HANDLE,DWORD) = LoadLibraryExA;
+static FARPROC (WINAPI *TrueGetProcAddress)(HMODULE,LPCSTR) = GetProcAddress;
+static HANDLE (WINAPI *TrueCreateThread)(LPSECURITY_ATTRIBUTES,SIZE_T,LPTHREAD_START_ROUTINE,LPVOID,DWORD,LPDWORD) = CreateThread;
+
+static HANDLE WINAPI MineCreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stack, LPTHREAD_START_ROUTINE start, LPVOID param, DWORD flags, LPDWORD id)
+{
+	char log[160];
+	wsprintf(log,"CreateThread start=%p param=%p flags=%08X callerTid=%u",start,param,flags,GetCurrentThreadId());
+	M1Log(log);
+	if(start == 0)
+	{
+		M1Log("CreateThread NULL start — blocked");
+		if(id) *id = 0;
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return 0;
+	}
+	HANDLE h = TrueCreateThread(sa,stack,start,param,flags,id);
+	if(h && id)
+	{
+		wsprintf(log,"CreateThread OK newTid=%u",*id);
+		M1Log(log);
+	}
+	return h;
+}
+
+static FARPROC WINAPI MineGetProcAddress(HMODULE m, LPCSTR name)
+{
+	FARPROC p = TrueGetProcAddress(m, name);
+	if(name && ((DWORD)name > 0xFFFF))
+	{
+		if(!p)
+		{
+			char log[192];
+			wsprintf(log,"GetProcAddress NULL for %s mod=%p",name,m);
+			M1Log(log);
+		}
+		else if(strstr(name,"aff") || strstr(name,"voce"))
+		{
+			char log[192];
+			wsprintf(log,"GetProcAddress %s -> %p",name,p);
+			M1Log(log);
+		}
+	}
+	else if(!p && name && ((DWORD)name <= 0xFFFF))
+	{
+		char log[128];
+		wsprintf(log,"GetProcAddress ordinal %u NULL mod=%p",(DWORD)name,m);
+		M1Log(log);
+	}
+	return p;
+}
+
+static void PatchSuZaNaScanners(HMODULE mod)
+{
+	if(!mod) return;
+	BYTE* base = (BYTE*)mod;
+	// Neutered scanners (RVA from CLtDLL 2010 build) — keep B540 license patches intact.
+	// 9F70 FindWindowEx class scanner, B420 process scanner, B320/A110 helper loops.
+	const DWORD rvas[] = { 0x9F70, 0xB420, 0xB320, 0xA110, 0xA070, 0xA250 };
+	BYTE stub[] = { 0x33, 0xC0, 0xC3 }; // xor eax,eax; ret
+	for(int i=0;i<(int)(sizeof(rvas)/sizeof(rvas[0]));i++)
+	{
+		BYTE* p = base + rvas[i];
+		DWORD old = 0;
+		if(VirtualProtect(p, sizeof(stub), PAGE_EXECUTE_READWRITE, &old))
+		{
+			memcpy(p, stub, sizeof(stub));
+			VirtualProtect(p, sizeof(stub), old, &old);
+			char log[64];
+			wsprintf(log,"patched CLtDLL scanner RVA %04X",rvas[i]);
+			M1Log(log);
+		}
+	}
+	// Also rewrite ConsoleWindowClass string so any missed check won't match.
+	BYTE* s = base + 0xD7CC;
+	DWORD old2 = 0;
+	if(VirtualProtect(s, 20, PAGE_READWRITE, &old2))
+	{
+		memcpy(s, "ConsoleWindowClasZ", 18);
+		VirtualProtect(s, 20, old2, &old2);
+		M1Log("patched ConsoleWindowClass string in CLtDLL");
+	}
+}
+
+static int IsCLtDllName(LPCSTR name)
+{
+	if(!name) return 0;
+	const char* slash = strrchr(name,'\\');
+	const char* base = slash ? slash+1 : name;
+	return _stricmp(base,"CLtDLL.dll") == 0;
+}
+
+static HMODULE WINAPI MineLoadLibraryA(LPCSTR name)
+{
+	if(IsCLtDllName(name))
+	{
+		// Any successful CLtDLL LoadLibrary (SuZaNa or stub) takes the client
+		// "license OK" path which immediately AVs (EIP=0) on this VPS.
+		// Keep process alive via MessageBox/ExitProcess nop + EntryProc patches.
+		M1Log("LoadLibraryA CLtDLL blocked (VPS anti-crash)");
+		SetLastError(ERROR_MOD_NOT_FOUND);
+		return 0;
+	}
+	return TrueLoadLibraryA(name);
+}
+
+static HMODULE WINAPI MineLoadLibraryExA(LPCSTR name,HANDLE h,DWORD flags)
+{
+	if(IsCLtDllName(name))
+	{
+		M1Log("LoadLibraryExA CLtDLL blocked (VPS anti-crash)");
+		SetLastError(ERROR_MOD_NOT_FOUND);
+		return 0;
+	}
+	return TrueLoadLibraryExA(name,h,flags);
+}
 static int (WINAPI *TrueMessageBoxA)(HWND,LPCSTR,LPCSTR,UINT) = MessageBoxA;
 static HWND (WINAPI *TrueFindWindowA)(LPCSTR,LPCSTR) = FindWindowA;
 static HWND (WINAPI *TrueFindWindowW)(LPCWSTR,LPCWSTR) = FindWindowW;
@@ -293,7 +462,24 @@ static HWND WINAPI MineFindWindowW(LPCWSTR cls,LPCWSTR title)
 
 static HWND WINAPI MineFindWindowExA(HWND parent,HWND child,LPCSTR cls,LPCSTR title)
 {
+	char log[160];
+	wsprintf(log,"FindWindowExA cls=%s title=%s",cls ? cls : "(null)",title ? title : "(null)");
+	M1Log(log);
+	// SuZaNa: FindWindowExA(0,0,"ConsoleWindowClass",0) and cheat form classes
 	if(ClassIsConsoleA(cls) || TitleIsBadA(title)) return 0;
+	if(cls && (
+		_stricmp(cls,"TAddForm") == 0 ||
+		_stricmp(cls,"Tmb") == 0 ||
+		_stricmp(cls,"TformSettings") == 0 ||
+		_stricmp(cls,"TWildProxyMain") == 0 ||
+		_stricmp(cls,"AutoIt v3 GUI") == 0 ||
+		_stricmp(cls,"TUserdefinedform") == 0 ||
+		_stricmp(cls,"ThunderRT6FormDC") == 0 ||
+		_stricmp(cls,"TformAddressChange") == 0 ||
+		_stricmp(cls,"TMemoryBrowser") == 0 ||
+		_stricmp(cls,"TFoundCodeDialog") == 0 ||
+		strstr(cls,"Afx:") == cls
+	)) return 0;
 	return TrueFindWindowExA(parent,child,cls,title);
 }
 
@@ -379,6 +565,10 @@ static void InstallEarlyAntiCtHooks()
 	DetourAttach(&(PVOID&)TrueFindWindowA,MineFindWindowA);
 	DetourAttach(&(PVOID&)TrueFindWindowW,MineFindWindowW);
 	DetourAttach(&(PVOID&)TrueFindWindowExA,MineFindWindowExA);
+	DetourAttach(&(PVOID&)TrueLoadLibraryA,MineLoadLibraryA);
+	DetourAttach(&(PVOID&)TrueLoadLibraryExA,MineLoadLibraryExA);
+	DetourAttach(&(PVOID&)TrueGetProcAddress,MineGetProcAddress);
+	DetourAttach(&(PVOID&)TrueCreateThread,MineCreateThread);
 	DetourAttach(&(PVOID&)TrueExitProcess,MineExitProcess);
 	DetourAttach(&(PVOID&)TrueTerminateProcess,MineTerminateProcess);
 	if(TrueRtlExitUserProcess)
@@ -423,7 +613,7 @@ extern "C" _declspec(dllexport) void EntryProc();
 static DWORD WINAPI EarlyAndDeferredThread(LPVOID)
 {
 	M1Log("EarlyAndDeferred start");
-	InstallEarlyAntiCtHooks();
+	InstallEarlyAntiCtHooks(); // idempotent if DllMain already did it
 	InstallWinsockHooks();
 	M1Log("waiting for ASPack unpack (IP VA)");
 	for(int n=0;n<40;n++)
@@ -486,6 +676,9 @@ extern "C" _declspec(dllexport) void EntryProc()
 	M1Log("EntryProc start");
 	LoadMainInfo();
 	ApplyLivePatches();
+	ApplyCltLicensePatches();
+	// Allow ExitProcess again after license bypass so the game can shut down normally later.
+	InterlockedExchange(&gBlockCtExit,0);
 
 	// ProtocolCoreEx can crash mismatched 1.02c packs; enable only when M1_HOOK_PROTOCOL=1
 	if(GetEnvironmentVariableA("M1_HOOK_PROTOCOL",0,0) > 0)
@@ -527,6 +720,37 @@ extern "C" _declspec(dllexport) void EntryProc()
 	M1Log("EntryProc done");
 }
 
+static LONG WINAPI M1Vectored(EXCEPTION_POINTERS* ep)
+{
+	if(!ep || !ep->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
+	DWORD code = ep->ExceptionRecord->ExceptionCode;
+	if(code != 0xC0000005 && code != 0xC0000008) return EXCEPTION_CONTINUE_SEARCH;
+	char log[320];
+	DWORD addr = (DWORD)ep->ExceptionRecord->ExceptionAddress;
+	DWORD info0 = ep->ExceptionRecord->NumberParameters > 0 ? (DWORD)ep->ExceptionRecord->ExceptionInformation[0] : 0;
+	DWORD info1 = ep->ExceptionRecord->NumberParameters > 1 ? (DWORD)ep->ExceptionRecord->ExceptionInformation[1] : 0;
+	wsprintf(log,"VEH AV tid=%u code=%08X eip=%08X access=%u ptr=%08X",GetCurrentThreadId(),code,addr,info0,info1);
+	M1Log(log);
+	if(ep->ContextRecord)
+	{
+		wsprintf(log,"VEH ctx eip=%08X esp=%08X eax=%08X ebx=%08X ecx=%08X edx=%08X esi=%08X edi=%08X",
+			ep->ContextRecord->Eip, ep->ContextRecord->Esp,
+			ep->ContextRecord->Eax, ep->ContextRecord->Ebx,
+			ep->ContextRecord->Ecx, ep->ContextRecord->Edx,
+			ep->ContextRecord->Esi, ep->ContextRecord->Edi);
+		M1Log(log);
+		DWORD* sp = (DWORD*)ep->ContextRecord->Esp;
+		__try
+		{
+			wsprintf(log,"VEH stack %08X %08X %08X %08X %08X %08X",
+				sp[0],sp[1],sp[2],sp[3],sp[4],sp[5]);
+			M1Log(log);
+		}
+		__except(EXCEPTION_EXECUTE_HANDLER) {}
+	}
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
 BOOL APIENTRY DllMain(HANDLE hModule, DWORD reason, LPVOID)
 {
 	if(reason == DLL_PROCESS_ATTACH)
@@ -534,6 +758,10 @@ BOOL APIENTRY DllMain(HANDLE hModule, DWORD reason, LPVOID)
 		hins = (HINSTANCE)hModule;
 		DisableThreadLibraryCalls((HMODULE)hModule);
 		M1Log("DllMain attach");
+		AddVectoredExceptionHandler(1, M1Vectored);
+		// Install anti-CLtDLL hooks BEFORE CreateRemoteThread returns / main resumes,
+		// so FindWindowExA is hooked before SuZaNa can see ConsoleWindowClass.
+		InstallEarlyAntiCtHooks();
 		CreateThread(0,0,EarlyAndDeferredThread,0,0,0);
 	}
 	return 1;

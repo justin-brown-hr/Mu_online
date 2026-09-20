@@ -3,21 +3,20 @@ description: Mu S2 Milestone 1 — resume context for VPS / new chats
 alwaysApply: true
 ---
 
-# Milestone 1 continuation
+# Milestone 1 (complete 2026-09-20)
 
-When the user continues Mu Online Season 2 / M1 work, read and follow:
+Read `m1/SESSION-HANDOFF.md` first (authoritative status + root causes).
 
-- `m1/SESSION-HANDOFF.md` (authoritative status + next steps)
-- `m1/VPS-MIGRATE.md` (what is/isn't in git)
+## Hard facts (verified)
 
-## Hard constraints
-
-- M1 scope only: stack + client connect + Lorencia + combat + relog + one recording. No web admin / events UI.
-- Do **not** repeat dead loops: editing packed `main.exe` IP strings and blind relaunch.
-- `play-safe\main.exe` is ASPack-packed; use Release `Main.dll` inject (`m1/scripts/LaunchMu.cs`) after unpack.
-- ConnectServer UDP F4 server-list support is already patched in `SocketManagerUdp.cpp/.h`.
-- Current blocker: client still never sends to ConnectServer despite live IP `127.0.0.1` after successful EntryProc.
+- The client RUNS ON THIS VPS. Do not tell the user to use a local PC.
+- Start: `m1/scripts/06-start-client.ps1 -Restart`; scripted login: `. m1/scripts/MuUI.ps1; Enter-MuWorld`.
+- MU 1.02c is OpenGL; Mesa llvmpipe renders it. Keep dgVoodoo D3D/DDraw DLLs OUT of play-safe.
+- `hack.dll` MUST be present in play-safe (entry stub jumps to NULL without it).
+- `main.exe` entry point patched to 0x084569E9 (skips SuZaNa CLtDLL). Backup: main.exe.libhook-bak.
+- GameServer must be built with `GAMESERVER_LANGUAGE=1` (English opcodes). With 0, walk/attack are silently ignored. Rebuild: `m1/scripts/08-rebuild-gs.ps1`.
+- Scope: M1 only. No web admin / events UI.
 
 ## Credentials
 
-- Account `test` / `test123`, serial `k5lEopalwaudns8h`, version `1.02.03`
+- Account `test` / `test123`, character `M1Tester`, version `1.02.03`

@@ -1,118 +1,104 @@
-# M1 session handoff — continue on VPS
+# M1 session handoff — Milestone 1 complete on the VPS
 
-**Saved:** 2026-09-18  
-**Workspace root:** `C:\work\Mu_online` (this VPS: `WIN-2G5KCBCCQ1R`, public IP `103.56.164.158`)  
-**Package:** xMuPP Season 2 (`ptr0x-real/xMuPP`)  
-**Goal:** Milestone 1 — 4 servers up → client login → char in Lorencia → combat → logout/login persist → one acceptance recording.  
-**Scope lock:** No web admin / events UI / custom modules.
+**Updated:** 2026-09-20
+**Workspace root:** `C:\work\Mu_online` (VPS `WIN-2G5KCBCCQ1R`, IP `103.56.164.158`)
+**Package:** xMuPP Season 2 (`ptr0x-real/xMuPP`), client 1.02C+Season2 (Brazilian repack, English opcodes)
+**Scope lock:** No web admin / events UI.
 
 ---
 
-## Paste this in a new Cursor Agent chat on the VPS
+## Status
+
+| Area | Status | Evidence (`m1/evidence/`) |
+| --- | --- | --- |
+| SQL / ODBC / DS / JS / CS / GS | **Done** | — |
+| Client runs **on this VPS** (no GPU) | **Done** | `01-title-screen.png` |
+| Server list → GameServer → login | **Done** | `02-login-screen.png` |
+| Character create (`M1Tester`, DK) | **Done** | `03-character-created.png` |
+| Lorencia | **Done** | `04-lorencia-in-game.png` |
+| Combat (kills, EXP) | **Done** | `05-…budge-dragon.png`, `06-…spider.png` |
+| Relog (switch character → re-enter) | **Done** — EXP/position persisted in DB | `07-…`, `08-…` |
+| Recording | **Done** — 5m46s, 800x600, chat window hidden | `M1-full-run.mp4` (not in git, 140 MB) |
+
+**A local PC is NOT required.**
+
+---
+
+## Root causes fixed
+
+### Client (`play-safe\main.exe` would not start)
+
+`main.exe` starts through two stubs bolted on by the repacker, before ASPack:
 
 ```
-Continue Mu Online Season 2 Milestone 1 from m1/SESSION-HANDOFF.md.
-Do not repeat dead loops (file IP patch + blind relaunch).
-Stack is up on 103.56.164.158. Current blocker: SuZaNa CLtDLL Erro 100 (false-positive on ConsoleWindowClass / PowerShell) then AV when MessageBox is nop'd; without CLtDLL the loader shows fatal "Error Acesse: www.servidoresmuonline.com.br/".
-Next: finish anti-CLtDLL path so main stays alive with a real window + sendto CS, OR run play-safe client on a GPU PC (no agent consoles) against 103.56.164.158:44405.
-Login test/test123 → Lorencia → combat → recording.
+EP (.LibHook 0x0845C200):  LoadLibraryA("CLtDLL.dll")       ; SuZaNa
+0x088569E9 (.as_0003):     LoadLibraryA("hack.dll")
+                           or eax,eax / jz 0x00000000        ; fail = jump to NULL
+                           GetProcAddress(h,"Inicio"); call eax
+                           jmp 0x00782597                    ; ASPack / real start
 ```
 
----
+1. `hack.dll` had been renamed `.off` → the stub jumped to NULL ("EIP=0"). **Keep `hack.dll`.**
+2. SuZaNa skipped by repointing the PE entry point `0x0845C200 → 0x084569E9` (header offset `0x128`). Backup `main.exe.libhook-bak`.
+3. MU 1.02c is **OpenGL**. dgVoodoo D3D/DDraw DLLs crashed Mesa → moved to `play-safe\_dgvoodoo-disabled\`. Mesa llvmpipe renders on the Basic Display Adapter.
+4. `LaunchMu*.exe` injectors are not needed; `main.exe` loads `Main.dll` itself.
 
-## Status (2026-09-18 VPS)
+### Server (walking/combat silently ignored → no monsters)
 
-| Area | Status |
-| --- | --- |
-| Git repo on VPS | Done (`C:\work\Mu_online`) |
-| SQL Express + MuOnline + 32-bit ODBC | **Done** |
-| VS / MSBuild / C++ toolset v143 | **Done** |
-| Server EXEs (DS/JS/CS/GS) | **Done** — running; UDP F4 probe OK on public IP |
-| Account `test`/`test123` | **Done** |
-| `play-safe` client | **Done** at `m1/host/Client/play-safe/` |
-| Release `Main.dll` + `LaunchMu` | **Done** — suspended inject + early hooks + winsock rewrite; staged beside `main.exe` |
-| ConnectServer / MainInfo public IP | **103.56.164.158** |
-| Client launch on this VPS | **Blocked** — see SuZaNa / license notes below |
-| Client → ConnectServer `sendto` | Not yet observed |
-| Lorencia / combat / recording | Not started |
+`GameServer.vcxproj` defined **`GAMESERVER_LANGUAGE=0`** (Korean opcodes: walk `0xD3`,
+attack `0xD7`), overriding `stdafx.h`'s `1`. This client uses English opcodes
+(walk `0xD4`, attack `0x11`, position `0x15`, multi-skill `0xDB`), so every walk/attack
+packet fell through the dispatch `switch` with no error. The server kept the player at
+the spawn point, so monsters never entered the viewport. **Fixed: `GAMESERVER_LANGUAGE=1`**
+in both configs. Rebuild with `m1\scripts\08-rebuild-gs.ps1` (GameServer.exe is gitignored).
 
 ---
 
-## Critical findings (2026-09-18 — do not re-learn)
+## Known issues (not M1 blockers)
 
-1. **`Erro 100` is NOT DirectX.** Dialog text: SuZaNa CTM — “Foi Encontrado um Programa Hacker…”. Source DLL: `play-safe\CLtDLL.dll` (export `affvoce`). It `FindWindow`s `ConsoleWindowClass` (our PowerShell/agent consoles) and scans processes.
-2. **Renaming `CLtDLL.dll` away** avoids Erro 100 but the packed loader then shows fatal **`Error Acesse: www.servidoresmuonline.com.br/`** and exits on OK. Keep `CLtDLL.dll` present.
-3. **`LaunchMu` now `CREATE_SUSPENDED` → inject `Main.dll` → resume** so hooks install before CLtDLL runs (`m1/scripts/LaunchMu.cs`).
-4. **`Main.dll` early hooks** (MessageBox / FindWindow / Process32 / Module32 / ExitProcess): can nop Erro 100 MessageBox, but process then **AV `0xC0000005`** (~200ms) — ExitProcess nop often never logs (possible `RtlExitUserProcess` path; hook added, needs retest).
-5. Without CLtDLL + MessageBox nop on license nag: process stays alive but **no game window** (returning from ExitProcess after noreturn call = zombie).
-6. Still true: ASPack-packed `main.exe`; runtime IP via `Main.dll`; CS UDP F4 patched; do not file-patch packed IP strings.
-7. VPS video = **Microsoft Basic Display**; dgVoodoo D3D8/9 present. GPU PC client → `103.56.164.158:44405` remains valid fallback for M1 UI.
-8. Defender exclusion for play-safe folder required (user confirmed).
-
----
-
-## Critical findings (older — still valid)
-
-1. **`play-safe\main.exe` is ASPack-packed.** Editing connect IP strings in the file does **not** fix live connect. Runtime patch via `Main.dll` after unpack is required.
-2. **Debug `Main.dll` will not load** (depends on `VCRUNTIME140D`). Always build **Release|Win32** with toolset **v143**.
-3. Stock `main.exe` does **not** import `Main.dll`. Use injector: `m1/scripts/LaunchMu.cs` → `LaunchMu.exe` beside client.
-4. ConnectServer stock only answered server-list on **TCP**. Season 2 clients use **UDP** F4. Patch is in:
-   - `m1/host/Server/xMuPP-src/Source/Server Side/ConnectServer/SocketManagerUdp.cpp`
-   - `m1/host/Server/xMuPP-src/Source/Server Side/ConnectServer/SocketManagerUdp.h`
-5. Old session: live IP was `127.0.0.1` after inject, CS UDP probe worked, **game still never opened sockets to CS**. Do **not** another localhost IP file edit.
-6. Port candidates: `44405`, many `55557` hits. CS stays on **44405** unless proven otherwise (55557 listen test: still no client hit).
-7. **Likely real cause (not yet proven):** `LaunchMu` used to wait for the MU window **plus 2 seconds**. CS connect often fires at scene start, so inject was after the first (failed) connect, and the game already sat on the disconnect OK dialog. IP in memory looked correct *after* that, which is why CS logs stayed empty.
-8. xMuPP 1.02c `EntryProc` patches IP at `0x7A16C2` and does **not** patch `IpAddressPort` (that SetWord is only in a commented S6-era block).
-9. This VPS has **no** SQL, compiler, server binaries, or client. Old-session “stack is up” does not carry over.
+- **HP number is byte-swapped** in the HUD (e.g. `4355` = `0x1103` → real `0x0311` = 785).
+  The xMuPP HP packet (`0x26`/`F3 03`) sends the value in the wrong byte order. Cosmetic.
+- The chat window starts at full screen height, so its frame looks like two tall vertical
+  lines across the view. **F4** cycles its size (hidden → small → medium → full). The size
+  isn't saved, so press F4 after each world entry (usually once) before recording.
+  `M1-full-run.mp4` was recorded in 3 segments with the chat hidden, then joined with ffmpeg.
+- GameServer receives connections from internet scanners (seen `195.250.79.2`) — ports are public.
+- **Test character was buffed for the combat test:** `M1Tester` Str 250 / Agi 120 / Vit 250
+  (set in DB while offline). A fresh level-1 unarmed DK dies in seconds to a group of
+  Budge Dragons.
 
 ---
 
-## Accounts / versions
+## How to run
 
-- Login: `test` / `test123`
-- Serial: `k5lEopalwaudns8h`
-- Version: `1.02.03` → bytes `22548`
-- `ServerList.dat`: GameServer `127.0.0.1:55901` SHOW
-- On VPS for external client: change ServerList + MainInfo IP to VPS public IP
-
----
-
-## Key paths
-
-```
-C:\work\Mu_online\m1\SESSION-HANDOFF.md
-C:\work\Mu_online\m1\VPS-MIGRATE.md
-C:\work\Mu_online\m1\M1-CHECKLIST.md
-C:\work\Mu_online\m1\scripts\03-start-stack.ps1
-C:\work\Mu_online\m1\scripts\04-sql-odbc-setup.ps1
-C:\work\Mu_online\m1\scripts\05-probe-cs.ps1
-C:\work\Mu_online\m1\scripts\LaunchMu.cs
-C:\work\Mu_online\m1\host\Server\xMuPP-src\Source\Server Side\ConnectServer\SocketManagerUdp.*
-C:\work\Mu_online\m1\host\Server\xMuPP-src\Source\Client Side\Main_v102c\Main.cpp
-C:\work\Mu_online\m1\host\Server\xMuPP-src\Server Files\
-C:\work\Mu_online\m1\host\Client\play-safe\   ← NOT in git
+```powershell
+C:\work\Mu_online\m1\scripts\03-start-stack.ps1           # if servers are down
+C:\work\Mu_online\m1\scripts\06-start-client.ps1 -Restart
+. C:\work\Mu_online\m1\scripts\MuUI.ps1; Enter-MuWorld     # scripted login -> Lorencia
+C:\work\Mu_online\m1\scripts\07-record.ps1 -Start / -Stop  # ffmpeg (C:\tools\ffmpeg)
 ```
 
----
+Manual: server group **"Ajuda em MuOnline"** → **"(Non-PVP) Conectar"** → `test` / `test123`
+→ select `M1Tester` → Connect. In game, Esc → "Trocar de personagem" = relog.
 
-## Next engineering steps (ordered)
+Route to monsters (screen directions, 800x600): walk **lower-right** through town,
+across the east bridge (~x 165–185), Spiders/Budge Dragons at x 180–226.
+Screen-up ≈ −X, screen-down/right ≈ +X. Attack monsters once they are adjacent.
 
-1. Install **SQL Server Express** (instance `SQLEXPRESS`, TCP/IP on) + run `m1\scripts\04-sql-odbc-setup.ps1`.
-2. Install **VS 2022 Build Tools** with C++ (`Microsoft.VisualStudio.Workload.VCTools`) + ATL, toolset v143.
-3. Build Release Win32: ConnectServer, JoinServer, DataServer, GameServer (post-build copies into `Server Files`). Rebuild ConnectServer so UDP F4 patch is in the EXE.
-4. Build Release Win32 `Main.dll` (`Main_v102c`, toolset v143). Compile `LaunchMu.cs` x86 with `C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe`.
-5. Copy `play-safe` client onto this VPS (not in git). Put `Main.dll` + `LaunchMu.exe` beside `main.exe`.
-6. Start stack: `m1\scripts\03-start-stack.ps1`. Probe UDP: `m1\scripts\05-probe-cs.ps1`.
-7. Run `LaunchMu.exe`. Read `play-safe\m1-main-dll.log` for `sendto` / `connect` lines. That proves whether connect ever fires.
-8. Login `test` / `test123` → create char → Lorencia → combat → relog → one recording.
-9. Do not start M2 web/admin work.
+Helpers: `MuUI.ps1` (`Get-MuWindow`, `Click`, `TypeText`, `Key`, `Shot`, `Pin`,
+`Enter-MuWorld`) — clicks use absolute `mouse_event` moves (DirectInput ignores
+`SetCursorPos`). The window must be pinned on top or the editor steals focus.
 
----
+Diagnostics:
+- `play-safe\m1-main-dll.log` — Main.dll hex-dumps every `send`/`recv`.
+- `m1\scripts\MuTrace.cs` — tiny Win32 debugger (`csc /platform:x86 MuTrace.cs`).
+- C1 client packets are XOR'd (key `E7 6D 3A 89 …`, `GAMESERVER_UPDATE 200`).
 
-## Cursor chat continuity
+## Accounts
 
-Local IDE chats **do not sync** to the VPS.
+- `test` / `test123` — character `M1Tester` (Dark Knight)
+- CS `103.56.164.158:44405`, GS `55901`, JS `55970`, DS `55960`
 
-**Best for same conversation:** on this PC, after git push, use Cursor **Move to Cloud**, then open that agent from the VPS at https://cursor.com/agents  
+## Next
 
-**Reliable fallback:** new Agent chat on VPS + paste the prompt at the top of this file.
+M1 acceptance is complete. Do not start M2 web/admin until asked.
