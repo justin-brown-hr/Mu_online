@@ -18,11 +18,13 @@ The same `play-safe` folder also works on any normal Windows PC.
 - [x] Stack + account + public CS (`103.56.164.158:44405`)
 - [x] Client runs on the VPS (no GPU) — `evidence/01-title-screen.png`
 - [x] Server list → GameServer → login — `evidence/02-login-screen.png`
-- [x] Character created — `evidence/03-character-created.png`
+- [x] Character create / select — `evidence/03-character-select.png`
 - [x] Lorencia — `evidence/04-lorencia-in-game.png`
-- [x] Combat — `evidence/05-combat-kill-budge-dragon.png`, `06-combat-kill-spider.png`
-- [x] Relog — `evidence/07-relog-character-select.png`, `08-relog-back-in-lorencia.png`
-- [x] Recording — `evidence/M1-full-run.mp4` (5m46s, chat window hidden; not in git)
+- [x] Combat + item drop — `evidence/05-combat-kill-budge-dragon.png`, `06-combat-kill-spider-item-drop.png`
+- [x] Relog (level persisted) — `evidence/07-relog-character-select.png`, `08-relog-back-in-lorencia.png`
+- [x] Recording — `evidence/M1-full-run.mp4` (6m28s, 1024x768, chat hidden; not in git)
+
+Client runs at **1024x768** (registry `HKCU\Software\Webzen\Mu\Config` → `Resolution` = 2).
 
 Known cosmetic issue: HP number in the HUD is byte-swapped (server packet bug).
 

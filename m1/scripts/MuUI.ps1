@@ -92,6 +92,24 @@ public class MuUI {
     System.Threading.Thread.Sleep(400);
   }
 
+  // MU draws its own cursor from DirectInput relative deltas, which drift away
+  // from the real pointer - menu rows then swallow clicks because the game
+  // thinks the cursor is 20-30px elsewhere. Parking at the screen corner first
+  // clamps both cursors to the same place, so the following move re-syncs them.
+  public static void MoveToSync(IntPtr h, int cx, int cy) {
+    mouse_event(0x0001 | 0x8000, 0, 0, 0, IntPtr.Zero);
+    System.Threading.Thread.Sleep(220);
+    MoveTo(h, cx, cy);
+  }
+
+  public static void ClickSync(IntPtr h, int cx, int cy) {
+    MoveToSync(h, cx, cy);
+    mouse_event(0x0002, 0, 0, 0, IntPtr.Zero);
+    System.Threading.Thread.Sleep(90);
+    mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+    System.Threading.Thread.Sleep(400);
+  }
+
   public static void Key(byte vk) {
     keybd_event(vk, 0, 0, IntPtr.Zero);
     System.Threading.Thread.Sleep(60);
@@ -134,25 +152,212 @@ function Get-MuWindow {
     return $h
 }
 
-# Full path from title screen to in-game (800x600 client, coords verified 2026-09-19):
-# server group -> sub-server -> login -> select first character -> Connect.
+# --- calibrated screen tests ------------------------------------------------
+# Pixel probes verified at 1280x1024 (2026-09-22). Bands are expressed as
+# fractions of the client area so other resolutions degrade gracefully.
+
+function Get-MuShot {
+    param([IntPtr]$H)
+    $p = Join-Path $env:TEMP 'm1-probe.png'
+    try { [MuUI]::Shot($H, $p) | Out-Null } catch { return $null }
+    Add-Type -AssemblyName System.Drawing
+    return [System.Drawing.Bitmap]::FromFile($p)
+}
+
+# The expanded sub-server row ("...(Non-PVP) Conectar") is drawn in bright
+# yellow text; when the group is collapsed that band is just sky.
+function Test-MuSubServerRow {
+    param([IntPtr]$H)
+    $bmp = Get-MuShot $H
+    if (-not $bmp) { return $false }
+    try {
+        $r = New-Object MuUI+RECT; [MuUI]::GetClientRect($H, [ref]$r) | Out-Null
+        $n = 0
+        for ($y = [int]($r.B * 0.410); $y -lt [int]($r.B * 0.430); $y += 2) {
+            for ($x = [int]($r.R * 0.425); $x -lt [int]($r.R * 0.582); $x += 2) {
+                $c = $bmp.GetPixel($x, $y)
+                if ($c.R -gt 200 -and $c.G -gt 200 -and $c.B -lt 170) { $n++ }
+            }
+        }
+        return ($n -gt 12)
+    } finally { $bmp.Dispose() }
+}
+
+# The login dialog's frame is neutral grey; the scene behind it never is.
+function Test-MuLoginDialog {
+    param([IntPtr]$H)
+    $bmp = Get-MuShot $H
+    if (-not $bmp) { return $false }
+    try {
+        $r = New-Object MuUI+RECT; [MuUI]::GetClientRect($H, [ref]$r) | Out-Null
+        foreach ($fx in 0.406, 0.500) {
+            $c = $bmp.GetPixel([int]($r.R * $fx), [int]($r.B * 0.684))
+            $b = ($c.R + $c.G + $c.B) / 3
+            if ([Math]::Abs($c.R - $c.G) -lt 8 -and [Math]::Abs($c.G - $c.B) -lt 8 -and $b -gt 25 -and $b -lt 95) { return $true }
+        }
+        return $false
+    } finally { $bmp.Dispose() }
+}
+
+# The chat frame's scrollbar column is a bright tan strip; the 3D view is not.
+function Test-MuChatVisible {
+    param([IntPtr]$H)
+    $bmp = Get-MuShot $H
+    if (-not $bmp) { return $false }
+    try {
+        $r = New-Object MuUI+RECT; [MuUI]::GetClientRect($H, [ref]$r) | Out-Null
+        $n = 0; $tot = 0
+        for ($y = [int]($r.B * 0.625); $y -lt [int]($r.B * 0.879); $y += 2) {
+            for ($x = [int]($r.R * 0.677); $x -lt [int]($r.R * 0.695); $x += 2) {
+                $c = $bmp.GetPixel($x, $y); $tot++
+                if ($c.R -gt 150 -and $c.G -gt 140 -and $c.B -gt 90 -and [Math]::Abs($c.R - $c.G) -lt 40) { $n++ }
+            }
+        }
+        if ($tot -eq 0) { return $false }
+        return (($n / $tot) -gt 0.04)
+    } finally { $bmp.Dispose() }
+}
+
+function Hide-MuChat {
+    param([IntPtr]$H)
+    # F4 cycles hidden -> small -> medium -> full and the size is never saved.
+    for ($i = 0; $i -lt 4; $i++) {
+        if (-not (Test-MuChatVisible $H)) { return }
+        [MuUI]::Key(0x73); Start-Sleep -Milliseconds 900
+    }
+}
+
+# GameServer keeps the player object for a while after the socket closes, so a
+# login too soon after killing the client is answered with "disconnected".
+function Wait-MuAccountFree {
+    param([string]$Account = 'test', [int]$TimeoutSec = 45)
+    $cs = "Server=.\SQLEXPRESS;Database=MuOnline;Integrated Security=True"
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $cn = New-Object System.Data.SqlClient.SqlConnection($cs); $cn.Open()
+            $cmd = $cn.CreateCommand()
+            $cmd.CommandText = "SELECT ISNULL(ConnectStat,0) FROM MEMB_STAT WHERE memb___id=@a"
+            [void]$cmd.Parameters.AddWithValue('@a', $Account)
+            $v = $cmd.ExecuteScalar(); $cn.Close()
+            if ([int]$v -eq 0) { return $true }
+        } catch { }
+        Start-Sleep -Seconds 5
+    }
+    # Killing the client leaves JoinServer thinking the account is still online,
+    # and the next login is answered with "Você foi desconectado do servidor".
+    # Clearing the flag directly is the usual fix for a stuck account.
+    try {
+        $cn = New-Object System.Data.SqlClient.SqlConnection($cs); $cn.Open()
+        $cmd = $cn.CreateCommand()
+        $cmd.CommandText = "UPDATE MEMB_STAT SET ConnectStat=0 WHERE memb___id=@a"
+        [void]$cmd.Parameters.AddWithValue('@a', $Account)
+        [void]$cmd.ExecuteNonQuery(); $cn.Close()
+        Write-Host "cleared stale online flag for '$Account'" -ForegroundColor Yellow
+        return $true
+    } catch { return $false }
+}
+
+# "Você foi desconectado do servidor" - a grey box ABOVE the login form.
+# Distinguishes a refused login from a working one.
+function Test-MuDisconnectDialog {
+    param([IntPtr]$H)
+    $bmp = Get-MuShot $H
+    if (-not $bmp) { return $false }
+    try {
+        $r = New-Object MuUI+RECT; [MuUI]::GetClientRect($H, [ref]$r) | Out-Null
+        $n = 0; $tot = 0
+        for ($y = [int]($r.B * 0.465); $y -lt [int]($r.B * 0.52); $y += 3) {
+            for ($x = [int]($r.R * 0.40); $x -lt [int]($r.R * 0.60); $x += 3) {
+                $c = $bmp.GetPixel($x, $y); $tot++
+                $b = ($c.R + $c.G + $c.B) / 3
+                if ([Math]::Abs($c.R - $c.G) -lt 10 -and [Math]::Abs($c.G - $c.B) -lt 10 -and $b -gt 25 -and $b -lt 110) { $n++ }
+            }
+        }
+        if ($tot -eq 0) { return $false }
+        return (($n / $tot) -gt 0.6)
+    } finally { $bmp.Dispose() }
+}
+
+# Full path from title screen to in-game. Hit-boxes move with the client
+# resolution, so coordinates are per-resolution; each step is verified with a
+# pixel probe and retried, because the server-list rows swallow single clicks.
 function Enter-MuWorld {
-    param([string]$User = 'test', [string]$Pass = 'test123', [int]$WaitWorld = 12)
+    param(
+        [string]$User = 'test',
+        [string]$Pass = 'test123',
+        [int]$WaitWorld = 16,
+        [switch]$HideChat
+    )
     $h = Get-MuWindow
     if (-not $h) { throw "MU window not found" }
-    [MuUI]::Pin($h, $true)                                        # stay above the editor while driving input
-    [MuUI]::Focus($h)
-    Start-Sleep -Seconds 1
-    [MuUI]::Click($h, 218, 217); Start-Sleep -Seconds 2      # server group "Ajuda em MuOnline"
-    [MuUI]::Click($h, 400, 216); Start-Sleep -Seconds 4      # "(Non-PVP) Conectar"
-    [MuUI]::Click($h, 420, 352); Start-Sleep -Milliseconds 400      # account field
-    for ($i = 0; $i -lt 12; $i++) { [MuUI]::Key(0x08) }              # clear
+    [MuUI]::Pin($h, $true); [MuUI]::Focus($h); Start-Sleep -Seconds 2
+
+    $r = New-Object MuUI+RECT; [MuUI]::GetClientRect($h, [ref]$r) | Out-Null
+    $c = switch ("$($r.R)x$($r.B)") {
+        '1280x1024' { @{ Group = @(458, 428); Sub = @(660, 431); Acct = @(660, 620); Ok = @(652, 712); Slot = @(245, 700); Connect = @(1183, 927) } }
+        '1024x768'  { @{ Group = @(330, 298); Sub = @(505, 299); Acct = @(532, 465); Ok = @(523, 541); Slot = @(195, 540); Connect = @(915, 684) } }
+        '800x600'   { @{ Group = @(218, 217); Sub = @(400, 216); Acct = @(420, 352); Ok = @(411, 428); Slot = @(155, 420); Connect = @(695, 526) } }
+        default     { throw "no UI coordinates for $($r.R)x$($r.B) - add them (see SESSION-HANDOFF.md)" }
+    }
+
+    Wait-MuAccountFree -Account $User | Out-Null
+    Wait-MuServerIdle | Out-Null            # GameServer must have dropped the old session
+
+    # expand the server group
+    for ($i = 0; $i -lt 4; $i++) {
+        if (Test-MuSubServerRow $h) { break }
+        [MuUI]::ClickSync($h, $c.Group[0], $c.Group[1]); Start-Sleep -Seconds 3
+    }
+    if (-not (Test-MuSubServerRow $h)) { throw "server group would not expand" }
+
+    # pick the sub-server -> login dialog
+    for ($i = 0; $i -lt 4; $i++) {
+        if (Test-MuLoginDialog $h) { break }
+        [MuUI]::ClickSync($h, $c.Sub[0], $c.Sub[1]); Start-Sleep -Seconds 4
+    }
+    if (-not (Test-MuLoginDialog $h)) { throw "login dialog would not open" }
+
+    [MuUI]::ClickSync($h, $c.Acct[0], $c.Acct[1]); Start-Sleep -Milliseconds 500
+    for ($i = 0; $i -lt 12; $i++) { [MuUI]::Key(0x08) }
     [MuUI]::TypeText($User)
-    [MuUI]::Key(0x09); Start-Sleep -Milliseconds 300                  # Tab -> password
+    [MuUI]::Key(0x09); Start-Sleep -Milliseconds 400
     for ($i = 0; $i -lt 12; $i++) { [MuUI]::Key(0x08) }
     [MuUI]::TypeText($Pass)
-    [MuUI]::Key(0x0D); Start-Sleep -Seconds 6                         # Enter = OK
-    [MuUI]::Click($h, 155, 420); Start-Sleep -Seconds 2               # first character slot
-    [MuUI]::Click($h, 695, 526); Start-Sleep -Seconds $WaitWorld      # Connect
+    [MuUI]::Key(0x0D); Start-Sleep -Seconds 3
+    [MuUI]::ClickSync($h, $c.Ok[0], $c.Ok[1]); Start-Sleep -Seconds 8
+
+    if (Test-MuDisconnectDialog $h) {
+        throw "server refused the login ('desconectado') - account still registered as online"
+    }
+
+    [MuUI]::ClickSync($h, $c.Slot[0], $c.Slot[1]); Start-Sleep -Seconds 3
+    [MuUI]::ClickSync($h, $c.Connect[0], $c.Connect[1]); Start-Sleep -Seconds $WaitWorld
+
+    if ($HideChat) { Hide-MuChat $h }
     return $h
+}
+
+# GameServer's window title carries its live player count, e.g.
+# "[PREMIUM] MuEMU (PlayerCount : 1/1000) (MonsterCount : 4150/8000)".
+# MEMB_STAT clears before GameServer drops the player object, so a login can
+# still be answered with "disconnected"; this is the reliable signal.
+function Get-MuServerPlayerCount {
+    Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue
+    $p = Get-Process GameServer -ErrorAction SilentlyContinue
+    if (-not $p) { return -1 }
+    $t = $p.MainWindowTitle
+    if ($t -match 'PlayerCount\s*:\s*(\d+)') { return [int]$Matches[1] }
+    return -1
+}
+
+function Wait-MuServerIdle {
+    param([int]$TimeoutSec = 150)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $n = Get-MuServerPlayerCount
+        if ($n -le 0) { return $true }
+        Start-Sleep -Seconds 5
+    }
+    return $false
 }

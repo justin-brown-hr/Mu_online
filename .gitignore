@@ -35,6 +35,10 @@ Desktop.ini
 .DS_Store
 
 # Gameplay recordings are too large for git (GitHub limit 100 MB) - share separately
-m1/evidence/*.mp4
-m1/evidence/*.mkv
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.wmv
+*.webm
 m1/evidence/.recording
